@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """ Connects to Grafana and retrieves the panels, which are then sent per Email """
 
-import logging
 import os
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from io import BytesIO
+
 import requests
 from PIL import Image
-from .lib import constants
 
-
-LOG = logging.getLogger(__name__)
-version = f'{constants.VERSION}-{constants.BUILD}'
+version = 'latest'
 
 
 class GrafanaEmail:
@@ -43,12 +40,12 @@ class GrafanaEmail:
         self.grafana['timeout'] = int(os.environ.get('GRAFANA_TIMEOUT', 60))
         self.grafana['host'] = os.environ.get('GRAFANA_HOST', 'grafana')
         self.grafana['header_host'] = os.environ.get('GRAFANA_HEADER_HOST')
-        self.grafana['port'] = int(os.environ.get('GRAFANA_PORT', 3000))
+        self.grafana['port'] = int(os.environ.get('GRAFANA_SERVICE_PORT', 3000))
         self.grafana['panel_ids'] = os.environ.get('PANEL_IDS', '1')
         self.grafana['url_params'] = os.environ.get('GRAFANA_URL_PARAMS')
 
         self.panel_args['orgId'] = os.environ.get('PANEL_ORG_ID', '1')
-        self.panel_args['timeout'] = int(os.environ.get('PANEL_TIMEOUT', '5'))
+        self.panel_args['timeout'] = int(os.environ.get('PANEL_TIMEOUT', '30'))
         self.panel_args['from'] = os.environ.get('PANEL_FROM', 'now-7d')
         self.panel_args['to'] = os.environ.get('PANEL_TO', 'now')
         self.panel_args['width'] = int(os.environ.get('PANEL_WIDTH', '500'))
@@ -60,9 +57,9 @@ class GrafanaEmail:
         self.message['From'] = self.smtp['from']
         self.message['To'] = ', '.join(self.smtp['to'])
 
-        LOG.debug(f'Panel options: {self.panel_args}')
-        LOG.debug(f'SMTP options: {self.smtp}')
-        LOG.debug(f'Grafana options: {self.grafana}')
+        print(f'Panel options: {self.panel_args}')
+        print(f'SMTP options: {self.smtp}')
+        print(f'Grafana options: {self.grafana}')
 
     def get_panels(self):
         """ downloads each panel and saves it to a variable """
@@ -74,12 +71,14 @@ class GrafanaEmail:
         uri = f"{method}://{self.grafana['host']}:{self.grafana['port']}"
         uri += f"/render/d-solo/{self.grafana['dashboard']}"
 
-        if self.grafana.get('url_params'):
-            uri = f'{uri}?{self.grafana["url_params"]}'
-
-        LOG.info(f'Setting download URI to {uri}')
-
         params = {}
+        if self.grafana.get('url_params'):
+            for part in self.grafana['url_params'].split('&'):
+                key, value = part.split('=')
+                params.update({key: value})
+
+        print(f'Setting download URI to {uri}')
+
         for param, arg in self.panel_args.items():
             if arg:
                 params.update({param: arg})
@@ -90,6 +89,7 @@ class GrafanaEmail:
 
         for panel in self.grafana['panel_ids'].split(','):
             params['panelId'] = panel
+            print(f"Final params: {params}")
 
             response = requests.get(
                 uri,
@@ -100,9 +100,12 @@ class GrafanaEmail:
                 timeout=self.grafana['timeout']
             )
             response.raw.decode_content = True
+            print("Got response")
             if response:
                 # self.panels.append({panel: base64.b64encode(imgObj).decode('UTF-8')})
                 self.panels.append({panel: self.transform_image(response.raw)})
+            else:
+                print("Response was None")
 
     def transform_image(self, image):
         """ takes the binary http answer and transforms it to image object for attaching """
@@ -114,6 +117,7 @@ class GrafanaEmail:
 
     def send_email(self):
         """ sends the email with the embedded panels """
+        print("Send email start")
         html = '<html><body><p>'
         host = self.grafana['host']
 
@@ -141,9 +145,12 @@ class GrafanaEmail:
 
         # send your email
         with smtplib.SMTP(self.smtp['host'], self.smtp['port']) as server:
-            if self.smtp.get('user') and self.smtp.get('password'):
+            server.starttls()
+            if self._smtp_user and self._smtp_password:
+                print("Logging in to SMTP server")
                 server.login(self._smtp_user, self._smtp_password)
             if self.panels:  # Only send if there are panels
+                print("Sending email")
                 server.sendmail(
                     self.smtp['from'],
                     self.smtp['to'],
@@ -151,12 +158,12 @@ class GrafanaEmail:
                 )
                 server.quit()
             else:
-                LOG.error('Panels not downloaded. No e-mail sent.')
-        LOG.info('Sent')
+                print('Panels not downloaded. No e-mail sent.')
+        print('Sent')
 
 
 if __name__ == '__main__':
-    LOG.info(f"Starting {__package__} {version}")
+    print(f"Starting {__package__} {version}")
     grafana = GrafanaEmail()
     grafana.get_panels()
     grafana.send_email()

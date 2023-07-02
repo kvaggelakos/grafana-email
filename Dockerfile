@@ -2,6 +2,8 @@ FROM alpine:latest
 LABEL maintainer="docker@ix.ai" \
       ai.ix.repository="ix.ai/grafana-email"
 
+ENV PYTHONUNBUFFERED=1
+
 COPY grafana-email.sh /usr/local/bin/grafana-email.sh
 COPY grafana-email/ /grafana-email
 RUN set -xeu; \
